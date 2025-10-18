@@ -1,22 +1,22 @@
-# app_v24.py
+
+# app_v25.py
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import sqlite3, bcrypt, json, requests, base64
-from datetime import datetime, timedelta, date
+from datetime import datetime, date
 
-# (Opsiyonel) e-posta reseti – SMTP secrets yoksa uyarı verir, crash yapmaz
+# Optional (SMTP for reset; safe-guarded)
 import smtplib, ssl, secrets, string
 from email.mime.text import MIMEText
 
-# ========= SABİTLER =========
+# =============== CONSTANTS ===============
 APP_TITLE = "Carioca"
-DB_FILE = "carioca_v24.db"
+DB_FILE = "carioca_v25.db"
 DEFAULT_FDC = "6P4rVEgRsNBnS8bAYqlq2DEDqiaf72txvmATH05g"
 
-# ========= SAYFA =========
+# =============== PAGE CONFIG ===============
 st.set_page_config(page_title=APP_TITLE, page_icon="🌴", layout="wide")
 
 def css_tropical():
@@ -27,6 +27,7 @@ def css_tropical():
     .metric-card { border-radius: 16px; padding: 16px; background: rgba(255,255,255,0.75); border: 1px solid rgba(255,255,255,0.6); }
     .pill { padding: 4px 10px; border-radius: 999px; background: rgba(0,0,0,0.06); font-size: 12px; font-weight: 600; }
     img.muscle { max-width: 140px; border-radius: 12px; border: 1px solid #fff; box-shadow: 0 4px 18px rgba(0,0,0,0.15); }
+    .header-avatar { text-align: right; }
     </style>
     '''
 
@@ -38,10 +39,11 @@ def css_minimal():
     .metric-card { border-radius: 12px; padding: 14px; background: #fff; border: 1px solid #e5e7eb; }
     .pill { padding: 3px 8px; border-radius: 12px; background: #eef2ff; font-size: 12px; font-weight: 600; }
     img.muscle { max-width: 140px; border-radius: 12px; border: 1px solid #e5e7eb; }
+    .header-avatar { text-align: right; }
     </style>
     '''
 
-# Dil dosyaları (varsa yükler)
+# Language files are optional
 @st.cache_data
 def load_lang():
     try:
@@ -60,7 +62,7 @@ def T(key):
     lang = st.session_state.get("lang", "en")
     return L.get(lang, {}).get(key, key)
 
-# ========= VERİTABANI =========
+# =============== DB ===============
 def get_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.execute("""
@@ -110,7 +112,7 @@ def check_pw(pw: str, h: bytes) -> bool:
     except Exception:
         return False
 
-# ========= OPSİYONEL: Şifre reset e-postası =========
+# =============== EMAIL RESET (optional) ===============
 def send_reset_email(to_email: str, username: str):
     try:
         token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
@@ -128,55 +130,64 @@ def send_reset_email(to_email: str, username: str):
     except Exception:
         st.warning("Şifre sıfırlama e-postası gönderilemedi (SMTP secrets eksik olabilir).")
 
-# ========= LOGIN / REGISTER =========
+# =============== LOGIN / REGISTER ===============
 def handle_login_success(u, remember, lang_pick, row):
-    """Form submit sonrası state mutasyonlarını güvenli şekilde yapar."""
     st.session_state["user"] = u
     st.session_state["remember"] = remember
     st.session_state["lang"] = row[1] or lang_pick
     st.session_state["theme"] = "tropical"
-    st.success("✅ Login successful!")
     st.rerun()
 
 def login_register_ui():
     st.markdown(css_tropical(), unsafe_allow_html=True)
     st.sidebar.header("Carioca 🌴")
-    lang_pick = st.sidebar.radio(T("language") or "Language", ["en", "tr"],
+    lang_pick = st.sidebar.radio("Language", ["en", "tr"],
                                  format_func=lambda x: "English" if x == "en" else "Türkçe",
                                  key="lang")
 
-    c1, c2 = st.columns(2)
-    # Login (Enter destekli form)
-    with c1:
-        st.subheader(T("login") or "Login")
+    left, right = st.columns(2)
+
+    # ---- Login (Enter enabled) ----
+    with left:
+        st.subheader("Login")
         with st.form("login_form", clear_on_submit=False):
-            u = st.text_input(T("username") or "Username")
-            p = st.text_input(T("password") or "Password", type="password")
-            remember = st.checkbox(T("remember_me") or "Remember me", value=True)
-            submitted = st.form_submit_button(T("login") or "Login")
+            u = st.text_input("Username", key="login_user")
+            p = st.text_input("Password", type="password", key="login_pw")
+            remember = st.checkbox("Remember Me", value=True, key="remember_me")
+            submitted = st.form_submit_button("Login")
+        st.markdown("""            <script>
+            document.addEventListener('keydown', function(e) {
+              if (e.key === 'Enter') {
+                const btns = window.parent.document.querySelectorAll('button[kind="primary"]');
+                if (btns && btns.length) { btns[0].click(); }
+              }
+            });
+            </script>
+        """, unsafe_allow_html=True)
+
         if submitted and u and p:
             row = conn.execute("SELECT pw_hash, lang FROM users WHERE username=?", (u,)).fetchone()
             if row and check_pw(p, row[0]):
-                # State'i hemen güncellemiyoruz; bir sonraki render'da güvenli şekilde yapacağız
                 st.session_state["pending_login"] = (u, remember, lang_pick, row)
+                st.rerun()
             else:
-                st.error("❌ Invalid credentials / Geçersiz bilgiler")
+                st.error("Invalid credentials")
 
         st.divider()
-        st.subheader(T("password_reset") or "Password Reset")
-        email = st.text_input(T("email") or "E-mail")
-        if st.button(T("send_reset") or "Send reset e-mail"):
+        st.subheader("Password Reset")
+        email = st.text_input("E-mail")
+        if st.button("Send Reset E-mail"):
             if email:
-                send_reset_email(email, u or "user")
+                send_reset_email(email, st.session_state.get("login_user", "user"))
             else:
-                st.warning("Lütfen profilinden e-posta ekle veya buraya yaz.")
+                st.warning("Please provide an e-mail.")
 
-    # Register
-    with c2:
-        st.subheader(T("register") or "Register")
-        ru = st.text_input((T("username") or "Username") + " *", key="ru")
-        rp = st.text_input((T("password") or "Password") + " *", type="password", key="rp")
-        if st.button(T("register") or "Register"):
+    # ---- Register ----
+    with right:
+        st.subheader("Register")
+        ru = st.text_input("Username *", key="ru")
+        rp = st.text_input("Password *", type="password", key="rp")
+        if st.button("Create Account"):
             if not ru or not rp:
                 st.warning("Fill required fields")
             else:
@@ -191,7 +202,6 @@ def login_register_ui():
                 except sqlite3.IntegrityError:
                     st.error("Username already exists")
 
-    # Ertelenmiş login işle
     if "pending_login" in st.session_state:
         u, remember, lang_pick, row = st.session_state.pop("pending_login")
         handle_login_success(u, remember, lang_pick, row)
@@ -200,18 +210,14 @@ if "user" not in st.session_state:
     login_register_ui()
     st.stop()
 
-# ========= KULLANICIYI YÜKLE =========
-row = conn.execute(
-    """
-    SELECT username, lang, theme, avatar, email, fdc_key, plan_type, meal_structure,
+# =============== LOAD USER ===============
+row = conn.execute("""    SELECT username, lang, theme, avatar, email, fdc_key, plan_type, meal_structure,
            age, sex, height_cm, weight_kg, bodyfat, birthdate, activity, target_weight, training_days, fasting
     FROM users WHERE username=?
-    """,
-    (st.session_state["user"],),
-).fetchone()
+""", (st.session_state["user"],)).fetchone()
 
 if not row:
-    st.warning("Kullanıcı bulunamadı. Lütfen tekrar giriş yapın.")
+    st.warning("User not found. Please login again.")
     for k in ["user", "lang", "theme", "fdc_key"]:
         st.session_state.pop(k, None)
     st.rerun()
@@ -224,9 +230,9 @@ st.session_state.setdefault("lang", lang or "en")
 st.session_state.setdefault("theme", theme or "tropical")
 st.session_state.setdefault("fdc_key", fdc_key or DEFAULT_FDC)
 
-# ========= TEMA TOGGLE =========
+# =============== THEME TOGGLE ===============
 picked_theme = st.sidebar.radio(
-    T("theme") or "Theme",
+    "Theme",
     ["tropical", "minimal"],
     index=0 if (st.session_state["theme"] == "tropical") else 1,
     format_func=lambda x: "🌴 Tropical" if x == "tropical" else "⚪ Minimal",
@@ -234,29 +240,28 @@ picked_theme = st.sidebar.radio(
 st.session_state["theme"] = picked_theme
 st.markdown(css_tropical() if picked_theme == "tropical" else css_minimal(), unsafe_allow_html=True)
 
-# Header (avatar sağ üstte)
-hc1, hc2 = st.columns([6, 1])
+# Header with avatar RIGHT
+hc1, hc2 = st.columns([8, 1])
 with hc1:
     st.title(APP_TITLE)
-    st.caption("Personalized plan engine • Theme toggle • OFF + FDC search • v24")
+    st.caption("Personalized plan engine • Theme toggle • OFF + FDC search • v25")
 with hc2:
     if avatar:
+        st.markdown('<div class="header-avatar">', unsafe_allow_html=True)
         st.image(avatar, width=72)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-if st.sidebar.button(T("logout") or "Logout"):
+if st.sidebar.button("Logout"):
     st.session_state.clear()
     st.rerun()
-st.sidebar.radio(T("language") or "Language", ["en", "tr"], key="lang",
+st.sidebar.radio("Language", ["en", "tr"], key="lang",
                  format_func=lambda x: "English" if x == "en" else "Türkçe")
 
-# ========= HESAPLAR =========
+# =============== HELPERS ===============
 def mifflin_st_jeor(sex: str, weight, height_cm, age):
-    if age is None:
-        age = 30
-    if height_cm is None:
-        height_cm = 175
-    if weight is None:
-        weight = 80.0
+    if age is None: age = 30
+    if height_cm is None: height_cm = 175
+    if weight is None: weight = 80.0
     if sex == "male":
         return 10 * weight + 6.25 * height_cm - 5 * age + 5
     else:
@@ -266,93 +271,91 @@ def activity_factor(level: str):
     return {"sedentary": 1.2, "light": 1.35, "moderate": 1.55, "high": 1.75, "very_high": 1.95}.get(level or "light", 1.35)
 
 def macro_split(cal, workout=True, weight=80):
-    if weight is None:
-        weight = 80
+    if weight is None: weight = 80
     protein_g = round(2.0 * float(weight))
     carbs_g = round((1.8 if workout else 0.8) * float(weight))
     fat_g = max(0, round((cal - (protein_g * 4 + carbs_g * 4)) / 9))
     return protein_g, carbs_g, fat_g
 
-# ========= TABS =========
-tabs = st.tabs([
-    T("profile") or "Profile",
-    T("deficit_calc") or "Deficit",
-    T("nutrition") or "Nutrition",
-    T("workout") or "Workout",
-    T("progress") or "Progress",
-    T("reminders") or "Reminders",
-    T("summary") or "Summary",
-])
+PLAN_LABELS = {
+    "full_body": "Full Body",
+    "ppl": "Push • Pull • Legs",
+    "upper_lower": "Upper / Lower",
+    "cardio_core": "Cardio + Core",
+}
+MEAL_LABELS = {
+    "two_plus_one": "2 Main + 1 Snack",
+    "three_meals": "3 Meals",
+    "four_meals": "4 Meals",
+}
 
-# ========= PROFILE =========
+# =============== TABS ===============
+tabs = st.tabs(["Profile", "Deficit Calculator", "Nutrition", "Workout", "Progress", "Reminders", "Summary"])
+
+# =============== PROFILE ===============
 with tabs[0]:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        # Doğum tarihi min/max: 1950–2035 (isteğin)
+    c1, c2, c3 = st.columns(3)
+    with c1:
         min_bd, max_bd = date(1950, 1, 1), date(2035, 12, 31)
         bd_val = pd.to_datetime(birthdate).date() if birthdate else None
-        bd_input = st.date_input(T("birthdate") or "Birthdate", value=bd_val, min_value=min_bd, max_value=max_bd)
+        bd_input = st.date_input("Birthdate", value=bd_val, min_value=min_bd, max_value=max_bd)
         if bd_input:
             today = date.today()
             age_calc = today.year - bd_input.year - ((today.month, today.day) < (bd_input.month, bd_input.day))
             age = age_calc
 
-        age = st.number_input(T("age") or "Age", min_value=10, max_value=100, value=int(age) if age else 30)
-        sex = st.selectbox(T("sex") or "Sex", ["male", "female"], index=0 if (sex or "male") == "male" else 1)
-        height_cm = st.number_input(T("height_cm") or "Height (cm)", min_value=120, max_value=230, value=int(height_cm) if height_cm else 175)
+        age = st.number_input("Age", min_value=10, max_value=100, value=int(age) if age else 30)
+        sex = st.selectbox("Sex", ["male", "female"], index=0 if (sex or "male") == "male" else 1)
+        height_cm = st.number_input("Height (cm)", min_value=120, max_value=230, value=int(height_cm) if height_cm else 175)
 
         st.write("—")
-        st.subheader(T("change_username") or "Change username")
-        newu = st.text_input(T("new_username") or "New username", value=u)
-        if st.button("Apply username"):
+        st.subheader("Change Username")
+        newu = st.text_input("New Username", value=u)
+        if st.button("Apply Username"):
             if newu and newu != u:
                 try:
-                    conn.execute("UPDATE users SET username=? WHERE username=?", (newu, u))
-                    conn.execute("UPDATE weights SET username=? WHERE username=?", (newu, u))
-                    conn.execute("UPDATE food_logs SET username=? WHERE username=?", (newu, u))
-                    conn.execute("UPDATE workout_logs SET username=? WHERE username=?", (newu, u))
+                    conn.execute("UPDATE users SET username=? WHERE username= ?", (newu, u))
+                    conn.execute("UPDATE weights SET username=? WHERE username= ?", (newu, u))
+                    conn.execute("UPDATE food_logs SET username=? WHERE username= ?", (newu, u))
+                    conn.execute("UPDATE workout_logs SET username=? WHERE username= ?", (newu, u))
                     conn.commit()
                     st.session_state["user"] = newu
                     st.success("Username updated. Please re-login.")
                 except sqlite3.IntegrityError:
                     st.error("Username already exists")
 
-    with col2:
-        weight_kg = st.number_input(T("weight_kg") or "Weight (kg)", min_value=30.0, max_value=250.0,
-                                    value=float(weight_kg) if weight_kg else 80.0, step=0.1)
+    with c2:
+        weight_kg = st.number_input("Weight (kg)", min_value=30.0, max_value=250.0, value=float(weight_kg) if weight_kg else 80.0, step=0.1)
         bodyfat_val = float(bodyfat) if bodyfat not in (None, "") else 0.0
-        bodyfat_in = st.number_input(T("bodyfat_pct") or "Bodyfat %", min_value=0.0, max_value=60.0,
-                                     value=bodyfat_val, step=0.1)
+        bodyfat_in = st.number_input("Body Fat (%)", min_value=0.0, max_value=60.0, value=bodyfat_val, step=0.1)
         bodyfat = bodyfat_in if bodyfat_in > 0 else None
-        target_weight = st.number_input(T("target_weight") or "Target weight", min_value=30.0, max_value=250.0,
-                                        value=float(target_weight) if target_weight else 80.0, step=0.1)
-        st.subheader(T("avatar") or "Avatar")
-        photo = st.file_uploader(T("upload_photo") or "Upload photo", type=["png", "jpg", "jpeg"])
+        target_weight = st.number_input("Target Weight (kg)", min_value=30.0, max_value=250.0, value=float(target_weight) if target_weight else 80.0, step=0.1)
+
+        st.subheader("Avatar")
+        photo = st.file_uploader("Upload Photo", type=["png", "jpg", "jpeg"])
         if photo:
             b64 = base64.b64encode(photo.read()).decode("utf-8")
             avatar = f"data:image/{photo.type.split('/')[-1]};base64,{b64}"
 
-    with col3:
-        activity = st.selectbox(T("activity") or "Activity",
-                                ["sedentary", "light", "moderate", "high", "very_high"],
+    with c3:
+        activity = st.selectbox("Activity Level", ["sedentary", "light", "moderate", "high", "very_high"],
                                 index=["sedentary", "light", "moderate", "high", "very_high"].index(activity or "light"))
-        training_days = st.slider(T("training_days") or "Training days", 1, 7, int(training_days) if training_days else 5)
-        fasting = st.selectbox(T("fasting") or "Fasting", [T("fasting_16_8") or "16:8"])
-        plan_type = st.selectbox(T("plan_type") or "Plan",
-                                 ["full_body", "ppl", "upper_lower", "cardio_core"],
-                                 index=["full_body", "ppl", "upper_lower", "cardio_core"].index(plan_type or "full_body"))
-        meal_structure = st.selectbox(T("meal_structure") or "Meals",
-                                      ["two_plus_one", "three_meals", "four_meals"],
-                                      index=["two_plus_one", "three_meals", "four_meals"].index(meal_structure or "two_plus_one"))
-        email = st.text_input(T("email") or "E-mail", value=email or "")
-        fdc_key = st.text_input(T("use_fdc") or "USDA FDC API key (optional)",
+        training_days = st.slider("Training Days / Week", 1, 7, int(training_days) if training_days else 5)
+        fasting = st.selectbox("Fasting", ["16:8 Intermittent Fasting"])
+        plan_type = st.selectbox("Training Plan", list(PLAN_LABELS.keys()),
+                                 index=list(PLAN_LABELS.keys()).index(plan_type or "full_body"),
+                                 format_func=lambda k: PLAN_LABELS[k])
+        meal_structure = st.selectbox("Meal Structure", list(MEAL_LABELS.keys()),
+                                      index=list(MEAL_LABELS.keys()).index(meal_structure or "two_plus_one"),
+                                      format_func=lambda k: MEAL_LABELS[k])
+        email = st.text_input("E-mail", value=email or "")
+        fdc_key = st.text_input("USDA FDC API Key (optional)",
                                 value=st.session_state.get("fdc_key") or DEFAULT_FDC,
-                                help=T("fdc_note") or "If provided, FDC results are included.")
+                                help="If provided, FDC results are included.")
 
-    if st.button(T("save") or "Save", type="primary"):
+    if st.button("Save Profile", type="primary"):
         conn.execute(
-            """
-            UPDATE users SET
+            """            UPDATE users SET
                 lang=?, theme=?, avatar=?, email=?, fdc_key=?, plan_type=?, meal_structure=?,
                 age=?, sex=?, height_cm=?, weight_kg=?, bodyfat=?, birthdate=?, activity=?,
                 target_weight=?, training_days=?, fasting=?
@@ -366,41 +369,39 @@ with tabs[0]:
         )
         conn.commit()
         st.session_state["fdc_key"] = fdc_key
-        st.success(T("update") or "Updated")
+        st.success("Profile updated")
 
-    # Hesaplamalar
+    # Metrics
     bmr = mifflin_st_jeor(sex, weight_kg, height_cm, age)
     tdee = bmr * activity_factor(activity)
     wcal = round(tdee * 0.75)
     rcal = round((bmr * 1.35) * 0.75)
     pc_w, cc_w, fc_w = macro_split(wcal, workout=True, weight=weight_kg)
     pc_r, cc_r, fc_r = macro_split(rcal, workout=False, weight=weight_kg)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(T("bmr") or "BMR", f"{int(bmr)} kcal")
-    c2.metric(T("tdee") or "TDEE", f"{int(tdee)} kcal")
-    c3.metric(T("workout_day_calories") or "Workout day kcal", f"{wcal} kcal")
-    c4.metric(T("rest_day_calories") or "Rest day kcal", f"{rcal} kcal")
-    st.write((T("macros") or "Macros") + ":")
-    st.write(f"🏋️ {T('workout_day') or 'Workout'}: P {pc_w}g / C {cc_w}g / F {fc_w}g")
-    st.write(f"🛌 {T('rest_day') or 'Rest'}: P {pc_r}g / C {cc_r}g / F {fc_r}g")
-    if avatar:
-        st.image(avatar, caption="Avatar", width=120)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("BMR", f"{int(bmr)} kcal")
+    k2.metric("TDEE", f"{int(tdee)} kcal")
+    k3.metric("Workout Day Target", f"{wcal} kcal")
+    k4.metric("Rest Day Target", f"{rcal} kcal")
+    st.write("Macros:")
+    st.write(f"🏋️ Workout: P {pc_w}g / C {cc_w}g / F {fc_w}g")
+    st.write(f"🛌 Rest: P {pc_r}g / C {cc_r}g / F {fc_r}g")
 
-# ========= DEFICIT =========
+# =============== DEFICIT CALCULATOR ===============
 with tabs[1]:
-    day_type = st.selectbox(T("day_type") or "Day type", [T("workout_day") or "Workout day", T("rest_day") or "Rest day"])
-    deficit = st.slider(T("deficit_percent") or "Deficit %", 5, 35, 25, step=1)
-    base_tdee = bmr * activity_factor(activity) if day_type == (T("workout_day") or "Workout day") else bmr * 1.35
+    day_type = st.selectbox("Day Type", ["Workout Day", "Rest Day"])
+    deficit = st.slider("Deficit (%)", 5, 35, 25, step=1)
+    base_tdee = bmr * activity_factor(activity) if day_type == "Workout Day" else bmr * 1.35
     target_cal = round(base_tdee * (1 - deficit / 100))
     weekly_loss = round(((base_tdee - target_cal) * 7) / 7700, 2)
     weight_3m = round((weight_kg or 80) - weekly_loss * 12, 1)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(T("tdee") or "TDEE", int(base_tdee))
-    c2.metric(T("target_cal") or "Target kcal", int(target_cal))
-    c3.metric(T("weekly_loss") or "Weekly loss", f"{weekly_loss} kg")
-    c4.metric(T("three_months_weight") or "Weight in 3 months", f"{weight_3m} kg")
+    c1.metric("TDEE", int(base_tdee))
+    c2.metric("Target Calories", int(target_cal))
+    c3.metric("Weekly Loss", f"{weekly_loss} kg")
+    c4.metric("Weight (3 Months)", f"{weight_3m} kg")
 
-# ========= GIDA ARAMA =========
+# =============== FOOD SEARCH HELPERS ===============
 def off_search(q, lang_code="en", page_size=25):
     try:
         url = "https://world.openfoodfacts.org/cgi/search.pl"
@@ -467,19 +468,19 @@ def macros_from_grams(row, grams):
         vals[k] = (float(v) * factor if isinstance(v, (int, float, str)) and str(v) not in ("", "None", "nan") else 0.0)
     return vals
 
-# ========= NUTRITION =========
+# =============== NUTRITION ===============
 with tabs[2]:
-    st.subheader(T("log_food") or "Log food")
-    picked_date = st.date_input("Tarih", value=date.today(), format="DD.MM.YYYY")
-    meal_sel = st.selectbox("Öğün", ["1. ana öğün", "2. ana öğün", "3. ana öğün", "1. ara öğün", "2. ara öğün", "3. ara öğün"])
+    st.subheader("Log Food")
+    picked_date = st.date_input("Date", value=date.today(), format="DD.MM.YYYY")
+    meal_sel = st.selectbox("Meal", ["1st Main", "2nd Main", "3rd Main", "1st Snack", "2nd Snack", "3rd Snack"])
 
     colA, colB, colC = st.columns([3, 1, 1])
     with colA:
-        q = st.text_input(T("search_food") or "Search food")
+        q = st.text_input("Search Food")
     with colB:
-        grams = st.number_input(T("amount_g") or "Amount (g)", min_value=1, max_value=2000, value=100)
+        grams = st.number_input("Amount (g)", min_value=1, max_value=2000, value=100)
     with colC:
-        lang_pick = st.radio(T("language") or "Language", ["en", "tr"], horizontal=True, key="food_lang",
+        lang_pick = st.radio("Result Language", ["en", "tr"], horizontal=True,
                              format_func=lambda x: "English" if x == "en" else "Türkçe")
 
     df = pd.DataFrame()
@@ -490,41 +491,41 @@ with tabs[2]:
         if frames:
             df = pd.concat(frames, ignore_index=True)
 
-    st.caption(T("api_results") or "API results")
+    st.caption("API Results")
     show_cols = ["source", "name", "brand", "kcal_100g", "protein_100g", "carbs_100g", "fat_100g",
                  "sugars_100g", "fiber_100g", "sodium_100g", "salt_100g"]
     st.dataframe(df[show_cols] if not df.empty else df, use_container_width=True)
     if df.empty and q:
-        st.warning((T("no_results") or "No results") + " — " + (T("search_tip") or "Try English/Turkish terms"))
+        st.warning("No results — try both English and Turkish terms.")
 
     if not df.empty:
-        sel_idx = st.selectbox(T("select_food") or "Select food",
+        sel_idx = st.selectbox("Select Item",
                                list(range(len(df))),
-                               format_func=lambda i: f"{df.iloc[i]['name']} ({df.iloc[i]['brand']}) [{df.iloc[i]['source']}]")
-        if st.button(T("add") or "Add"):
+                               format_func=lambda i: f"{df.iloc[i]['name']} ({df.iloc[i]['brand']}) [{df.iloc[i]['source']}]" )
+        if st.button("Add to Day"):
             rowf = df.iloc[int(sel_idx)].to_dict()
             vals = macros_from_grams(rowf, grams)
             conn.execute(
                 """INSERT INTO food_logs(username, dt, meal, food_name, grams, kcal, protein, carbs, fat, sugars, fiber, sodium, salt)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (st.session_state["user"], picked_date.isoformat(), meal_sel, rowf["name"], grams,
                  vals["kcal"], vals["protein"], vals["carbs"], vals["fat"], vals["sugars"], vals["fiber"], vals["sodium"], vals["salt"]),
             )
             conn.commit()
-            st.success(T("added") or "Added")
+            st.success("Added")
 
-    weekday_tr = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"][picked_date.weekday()]
-    st.subheader(f"{picked_date.strftime('%d.%m.%Y')} {weekday_tr}")
+    weekday_en = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][picked_date.weekday()]
+    st.subheader(f"{picked_date.strftime('%d.%m.%Y')} — {weekday_en}")
 
     logs = pd.read_sql_query(
         """SELECT meal, food_name, grams, kcal, protein, carbs, fat
-           FROM food_logs WHERE username=? AND dt=? ORDER BY meal""",
-        conn, params=(st.session_state["user"], picked_date.isoformat())
+           FROM food_logs WHERE username=? AND dt=? ORDER BY meal""", conn,
+        params=(st.session_state["user"], picked_date.isoformat())
     )
     st.dataframe(logs, use_container_width=True)
 
-    # Hedefler (profil değerlerinden)
-    is_workout = st.toggle("Bugün antrenman günü", value=(picked_date.weekday() in [0, 2, 4]))
+    # Targets (from profile)
+    is_workout = st.toggle("Today is a Workout Day", value=(picked_date.weekday() in [0, 2, 4]))
     prof = conn.execute("SELECT sex, height_cm, weight_kg, age, activity FROM users WHERE username=?",
                         (st.session_state["user"],)).fetchone()
     p_sex, p_h, p_w, p_age, p_act = prof if prof else ("male", 175, 80.0, 30, "light")
@@ -535,33 +536,33 @@ with tabs[2]:
 
     tot = logs[["kcal", "protein", "carbs", "fat"]].sum() if not logs.empty else pd.Series({"kcal": 0, "protein": 0, "carbs": 0, "fat": 0})
 
-    # Dikey yığılı barlar
+    # Stacked vertical bars
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=["Kalori"], y=[min(tot["kcal"], target_cal)], name="Alınan"))
+    fig.add_trace(go.Bar(x=["Calories"], y=[min(tot["kcal"], target_cal)], name="Intake"))
     over_cal = max(0, tot["kcal"] - target_cal)
     if over_cal > 0:
-        fig.add_trace(go.Bar(x=["Kalori"], y=[over_cal], name="Aşan", marker_color="red"))
-    fig.add_trace(go.Bar(x=["Protein"], y=[min(tot["protein"], tp)], name="Alınan"))
+        fig.add_trace(go.Bar(x=["Calories"], y=[over_cal], name="Over", marker_color="red"))
+    fig.add_trace(go.Bar(x=["Protein (g)"], y=[min(tot["protein"], tp)], name="Intake"))
     over_p = max(0, tot["protein"] - tp)
     if over_p > 0:
-        fig.add_trace(go.Bar(x=["Protein"], y=[over_p], marker_color="red", showlegend=False))
-    fig.add_trace(go.Bar(x=["Karb"], y=[min(tot["carbs"], tc)], name="Alınan"))
+        fig.add_trace(go.Bar(x=["Protein (g)"], y=[over_p], marker_color="red", showlegend=False))
+    fig.add_trace(go.Bar(x=["Carbs (g)"], y=[min(tot["carbs"], tc)], name="Intake"))
     over_c = max(0, tot["carbs"] - tc)
     if over_c > 0:
-        fig.add_trace(go.Bar(x=["Karb"], y=[over_c], marker_color="red", showlegend=False))
+        fig.add_trace(go.Bar(x=["Carbs (g)"], y=[over_c], marker_color="red", showlegend=False))
     fig.update_layout(barmode="stack", yaxis=dict(range=[0, max(target_cal, tp, tc) + 100]))
     st.plotly_chart(fig, use_container_width=True)
 
     deficit = (target_cal - float(tot["kcal"]))
     if deficit > 0:
-        st.success(f"Günlük kalori açığı: {int(deficit)} kcal → ~{round(deficit/7700, 3)} kg yağ")
+        st.success(f"Daily deficit: {int(deficit)} kcal → ~{round(deficit/7700, 3)} kg fat")
     else:
-        st.warning(f"Hedefi {int(-deficit)} kcal aştın")
+        st.warning(f"Exceeded by {int(-deficit)} kcal")
 
-# ========= WORKOUT =========
+# =============== WORKOUT ===============
 with tabs[3]:
-    st.subheader(T("workout_plan") or "Workout plan")
-    day = st.selectbox(T("day_picker") or "Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+    st.subheader("Workout Plan")
+    day = st.selectbox("Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
 
     alts = {
         "Squat": ["Leg Press", "Goblet Squat", "Hack Squat"],
@@ -627,16 +628,15 @@ with tabs[3]:
     todays = schedule.get(day, [])
     total_burn = 0
     if not todays:
-        st.info("Rest / Dinlenme")
+        st.info("Rest Day")
     else:
         for i, (name, sr, mg) in enumerate(todays, start=1):
             cols = st.columns([3, 2, 2])
             with cols[0]:
                 st.markdown(f"**{i}. {name}** — Target: {sr}")
-                # Hedef parse
                 try:
                     t_sets, t_reps = sr.lower().split("x")
-                    t_sets = int(t_sets.replace("~", " ").strip())
+                    t_sets = int(t_sets.strip())
                     t_reps = int(''.join([c for c in t_reps if c.isdigit()]))
                 except Exception:
                     t_sets, t_reps = 3, 10
@@ -644,33 +644,32 @@ with tabs[3]:
                 perf_reps = st.number_input("Reps", 0, 100, t_reps, key=f"r_{i}")
                 cal = round(0.1 * perf_sets * perf_reps * (float(weight_kg or 70) / 70.0))
                 st.write(f"≈ **{cal} kcal**")
-                if st.button("Kaydet", key=f"save_{i}"):
+                if st.button("Save", key=f"save_{i}"):
                     conn.execute(
                         """INSERT INTO workout_logs(username, dt, day, exercise, target_sets, target_reps, perf_sets, perf_reps, calories)
-                           VALUES(?,?,?,?,?,?,?,?,?)""",
-                        (st.session_state["user"], date.today().isoformat(), day, name, t_sets, t_reps, int(perf_sets), int(perf_reps), cal),
+                           VALUES(?,?,?,?,?,?,?,?,?)""", (st.session_state["user"], date.today().isoformat(), day, name, t_sets, t_reps, int(perf_sets), int(perf_reps), cal),
                     )
                     conn.commit()
-                    st.success(f"{name} kaydedildi (+{cal} kcal)")
+                    st.success(f"{name} saved (+{cal} kcal)")
                 total_burn += cal
             with cols[1]:
                 img = muscles.get(mg)
                 if img:
                     st.image(img, caption=mg, width=140)
             with cols[2]:
-                st.markdown(f"[{T('video_guide') or 'Video guide'}]({'https://www.youtube.com/results?search_query=' + name.replace(' ', '+')})")
-        st.info(f"**Toplam Yakılan (tahmini): {int(total_burn)} kcal**")
+                st.markdown(f"[Video Guide]({'https://www.youtube.com/results?search_query=' + name.replace(' ', '+')})")
+        st.info(f"**Total Burn (est.): {int(total_burn)} kcal**")
 
-# ========= PROGRESS =========
+# =============== PROGRESS ===============
 with tabs[4]:
-    st.subheader(T("progress_charts") or "Progress")
-    wcol1, wcol2 = st.columns([2, 1])
-    with wcol1:
-        st.write(T("weight_entry") or "Enter weight")
-        new_w = st.number_input(T("weight_kg") or "Weight (kg)", min_value=30.0, max_value=300.0,
+    st.subheader("Progress")
+    w1, w2 = st.columns([2, 1])
+    with w1:
+        st.write("Enter Your Weight")
+        new_w = st.number_input("Weight (kg)", min_value=30.0, max_value=300.0,
                                 value=float(weight_kg) if weight_kg else 80.0, step=0.1, key="neww")
-    with wcol2:
-        if st.button(T("add_weight") or "Add weight"):
+    with w2:
+        if st.button("Add Weight"):
             conn.execute("INSERT INTO weights(username, dt, weight) VALUES(?,?,?)",
                          (st.session_state["user"], date.today().isoformat(), float(new_w)))
             conn.execute("UPDATE users SET weight_kg=? WHERE username=?",
@@ -684,15 +683,14 @@ with tabs[4]:
         fig = px.line(wdf, x="dt", y="weight", markers=True, title="Weight Trend")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No weight data yet / Kilo kaydı yok")
+        st.info("No weight data yet")
 
-# ========= REMINDERS =========
+# =============== REMINDERS ===============
 with tabs[5]:
-    st.subheader(T("reminders") or "Reminders")
-    water_on = st.toggle(T("remind_water") or "Water reminder")
-    posture_on = st.toggle(T("remind_posture") or "Posture reminder")
-    js = f"""
-    <script>
+    st.subheader("Reminders")
+    water_on = st.toggle("Water Reminder")
+    posture_on = st.toggle("Posture Reminder")
+    js = f"""    <script>
     const waterOn = {str(water_on).lower()};
     const postureOn = {str(posture_on).lower()};
     function inRange(h, start, end) {{ return h>=start && h<end; }}
@@ -704,20 +702,20 @@ with tabs[5]:
     }}
     function schedule() {{
       const now = new Date(); const h = now.getHours();
-      if (waterOn && inRange(h,8,22)) setTimeout(()=>notify("{L.get('tr',{}).get('water_message','Ceku balım su içtin mi?')}"), 1000);
-      if (postureOn && inRange(h,8,21)) setTimeout(()=>notify("{L.get('tr',{}).get('posture_message','Dik dur eğilme, bu taraftar seninle')}"), 2000);
-      if (waterOn) setInterval(()=>{{ const h=(new Date()).getHours(); if(inRange(h,8,22)) notify("{L.get('tr',{}).get('water_message','Ceku balım su içtin mi?')}"); }}, 2*60*60*1000);
-      if (postureOn) setInterval(()=>{{ const h=(new Date()).getHours(); if(inRange(h,8,21)) notify("{L.get('tr',{}).get('posture_message','Dik dur eğilme, bu taraftar seninle')}"); }}, 3*60*60*1000);
+      if (waterOn && inRange(h,8,22)) setTimeout(()=>notify("Ceku balım su içtin mi?"), 1000);
+      if (postureOn && inRange(h,8,21)) setTimeout(()=>notify("Dik dur eğilme, bu taraftar seninle"), 2000);
+      if (waterOn) setInterval(()=>{{ const h=(new Date()).getHours(); if(inRange(h,8,22)) notify("Ceku balım su içtin mi?"); }}, 2*60*60*1000);
+      if (postureOn) setInterval(()=>{{ const h=(new Date()).getHours(); if(inRange(h,8,21)) notify("Dik dur eğilme, bu taraftar seninle"); }}, 3*60*60*1000);
     }}
     schedule();
     </script>
     """
     st.markdown(js, unsafe_allow_html=True)
 
-# ========= SUMMARY =========
+# =============== SUMMARY ===============
 with tabs[6]:
-    picked_date = st.date_input("Tarih (Özet)", value=date.today(), format="DD.MM.YYYY", key="sum_date")
-    st.header(f"Özet — {picked_date.strftime('%d.%m.%Y')}")
+    picked_date = st.date_input("Summary Date", value=date.today(), format="DD.MM.YYYY", key="sum_date")
+    st.header(f"Summary — {picked_date.strftime('%d.%m.%Y')}")
     nut = pd.read_sql_query(
         "SELECT SUM(kcal) as kcal, SUM(protein) as protein, SUM(carbs) as carbs FROM food_logs WHERE username=? AND dt=?",
         conn, params=(st.session_state["user"], picked_date.isoformat()),
@@ -744,24 +742,24 @@ with tabs[6]:
     fat = round(net_def / 7700, 3) if net_def > 0 else 0
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Alınan", f"{int(eat_k)} kcal")
-    c2.metric("Yakılan", f"{int(burn)} kcal")
-    c3.metric("Net Açık", f"{int(net_def)} kcal")
-    c4.metric("Tah. Yağ", f"{fat} kg")
+    c1.metric("Intake", f"{int(eat_k)} kcal")
+    c2.metric("Burned", f"{int(burn)} kcal")
+    c3.metric("Net Deficit", f"{int(net_def)} kcal")
+    c4.metric("Est. Fat Loss", f"{fat} kg")
 
     tot = pd.Series({"kcal": eat_k, "protein": eat_p, "carbs": eat_c})
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=["Kalori"], y=[min(tot["kcal"], target_cal)]))
+    fig.add_trace(go.Bar(x=["Calories"], y=[min(tot["kcal"], target_cal)]))
     over_cal = max(0, tot["kcal"] - target_cal)
     if over_cal > 0:
-        fig.add_trace(go.Bar(x=["Kalori"], y=[over_cal], marker_color="red"))
-    fig.add_trace(go.Bar(x=["Protein"], y=[min(tot["protein"], tp)]))
+        fig.add_trace(go.Bar(x=["Calories"], y=[over_cal], marker_color="red"))
+    fig.add_trace(go.Bar(x=["Protein (g)"], y=[min(tot["protein"], tp)]))
     over_p = max(0, tot["protein"] - tp)
     if over_p > 0:
-        fig.add_trace(go.Bar(x=["Protein"], y=[over_p], marker_color="red", showlegend=False))
-    fig.add_trace(go.Bar(x=["Karb"], y=[min(tot["carbs"], tc)]))
+        fig.add_trace(go.Bar(x=["Protein (g)"], y=[over_p], marker_color="red", showlegend=False))
+    fig.add_trace(go.Bar(x=["Carbs (g)"], y=[min(tot["carbs"], tc)]))
     over_c = max(0, tot["carbs"] - tc)
     if over_c > 0:
-        fig.add_trace(go.Bar(x=["Karb"], y=[over_c], marker_color="red", showlegend=False))
+        fig.add_trace(go.Bar(x=["Carbs (g)"], y=[over_c], marker_color="red", showlegend=False))
     fig.update_layout(barmode="stack", yaxis=dict(range=[0, max(target_cal, tp, tc) + 100]))
     st.plotly_chart(fig, use_container_width=True)
