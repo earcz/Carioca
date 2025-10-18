@@ -13,9 +13,9 @@ from email.mime.text import MIMEText
 def send_reset_email(to_email: str, username: str):
     # basit bir token üret
     token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-    body = f"Hi {username}, your temporary reset code: {token}\nUse it to set a new password inside the app."
+    body = f"Merhaba {username},\n\nCarioca şifre sıfırlama kodun: {token}\n\nBu kodu uygulamadaki şifre sıfırlama alanına girerek yeni şifreni oluşturabilirsin."
     msg = MIMEText(body)
-    msg["Subject"] = "Carioca Password Reset"
+    msg["Subject"] = "Carioca Şifre Sıfırlama"
     msg["From"] = st.secrets["smtp"]["from"]
     msg["To"] = to_email
 
@@ -26,8 +26,8 @@ def send_reset_email(to_email: str, username: str):
         server.sendmail(msg["From"], [to_email], msg.as_string())
 
     st.success("Reset e-mail gönderildi. Gelen kutunu kontrol et.")
-
 # email section ends
+
 st.set_page_config(page_title="Carioca", page_icon="🌴", layout="wide")
 
 BG_URL = "https://images.unsplash.com/photo-1544986581-efac024faf62?q=80&w=1400&auto=format&fit=crop"
@@ -126,7 +126,10 @@ def login_register_ui():
         st.subheader(T("password_reset"))
         email = st.text_input(T("email"))
         if st.button(T("send_reset")):
-            st.info("Set email in profile & configure SMTP creds in Streamlit secrets to enable real emails.")
+            if email:
+                send_reset_email(email, u or "user")
+            else:
+                st.warning("Lütfen profilinden e-posta ekle veya buraya yaz.")
     with c2:
         st.subheader(T("register"))
         u = st.text_input(T("username")+" *", key="ru")
