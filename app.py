@@ -119,7 +119,7 @@ def login_register_ui():
             if row and check_pw(p, row[0]):
                 if "lang" not in st.session_state: st.session_state["lang"] = row[1] or lang
                 st.session_state["user"] = u
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Invalid credentials / Geçersiz bilgiler")
         st.divider()
