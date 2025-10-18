@@ -95,7 +95,8 @@ def login_register_ui():
             row = conn.execute("SELECT pw_hash, lang FROM users WHERE username=?", (u,)).fetchone()
             if row and check_pw(p, row[0]):
                 st.session_state["user"] = u
-                st.session_state["lang"] = row[1] or lang
+                if "lang" not in st.session_state:
+                    st.session_state["lang"] = row[1] or lang
                 st.experimental_rerun()
             else:
                 st.error("Invalid credentials / Geçersiz bilgiler")
