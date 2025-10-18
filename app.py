@@ -5,6 +5,7 @@ import numpy as np
 import plotly.express as px
 import sqlite3, bcrypt, json, requests, base64
 from datetime import datetime, timedelta, date
+import plotly
 
 # email section starts
 import smtplib, ssl, secrets, string
