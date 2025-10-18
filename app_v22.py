@@ -127,7 +127,10 @@ def login_register_ui():
         if submitted:
             row = conn.execute("SELECT pw_hash, lang FROM users WHERE username=?", (u,)).fetchone()
             if row and check_pw(p, row[0]):
-                st.session_state["lang"] = row[1] or lang
+                try:
+                  st.session_state["lang"] = row[1] or lang
+                except st.errors.StreamlitAPIException:
+                  st.session_state.update({"lang": row[1] or lang})
                 st.session_state["user"] = u
                 st.session_state["remember"] = remember
                 st.rerun()
